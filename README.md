@@ -1,137 +1,30 @@
-# KahnemanGuard: A Dual-Process Fast-Slow Architecture for High-Throughput LLM Guardrails
+# KahnemanGuard (Public Benchmark & Colab Training Artifacts)
 
-**Author:** Pham Ngoc Son (Wilson Pham) | Student ID: 25210182  
-**Supervisor:** Dr. Nguyen Huu Quyen  
-**Institution:** University of Information Technology (VNU-HCM) — Faculty of Computer Engineering  
-**Research Project:** Master's Graduation Thesis in AI Safety & Systems  
-**Homage:** Inspired by Daniel Kahneman's *Thinking, Fast and Slow*
+This public repository contains the minimal components required to run the **System 1 ModernBERT-large (395M)** training and calibration benchmarks on **Google Colab NVIDIA L4 GPU**:
 
----
-
-## 📌 1. Formal Problem Formulation & Motivation
-
-Deploying Large Language Models (LLMs) in high-throughput enterprise environments requires real-time safety guardrails against **Jailbreaks**, **Prompt Injections**, **PII Exfiltration**, and **Toxicity**.
-
-Traditional defenses suffer from a severe trade-off between **Inference Latency** and **Attack Success Rate (ASR)**:
-- **Monolithic Heavy LLMs (e.g., Llama Guard 3 alone):** High defense accuracy, but unacceptable latency ($P99 > 1300\text{ms}$) and high token/GPU inference costs.
-- **Static Lightweight Classifiers (e.g., standard BERT heads):** Fast ($<50\text{ms}$), but brittle boundaries without uncertainty calibration lead to catastrophic false refusals or safety bypasses.
-
-### Mathematical Formulation
-Given an incoming prompt token sequence $X = (x_1, x_2, \dots, x_T)$:
-1. **Tier 1 (Fast Loop)** computes calibrated safety probability distribution $P(y \mid X)$ over $\mathcal{C} = \{\text{SAFE}, \text{JAILBREAK}, \text{PROMPT\_INJECTION}, \text{PII\_LEAK}, \text{TOXICITY}\}$:
-   $$\hat{y}_1 = \arg\max_{k \in \mathcal{C}} P(y=k \mid X), \quad c_1 = \max_{k \in \mathcal{C}} P(y=k \mid X)$$
-2. **Confidence Router** arbitrates with calibrated dual thresholds $(\tau_{\text{safe}}, \tau_{\text{unsafe}})$:
-   $$Y = \begin{cases}
-   \text{BYPASS (Forward to LLM)}, & \text{if } \hat{y}_1 = \text{SAFE} \land c_1 \ge \tau_{\text{safe}} \\[6pt]
-   \text{BLOCK (HTTP 403)}, & \text{if } \hat{y}_1 \ne \text{SAFE} \land c_1 \ge \tau_{\text{unsafe}} \\[6pt]
-   \text{ESCALATE (Invoke Tier 2)}, & \text{otherwise (Uncertainty Zone: } c_1 < \tau)
-   \end{cases}$$
-3. **Tier 2 (Deep Loop)** is invoked strictly in the uncertainty zone to perform contextual adjudication with verdict $\hat{y}_2 \in \{\text{SAFE}, \text{UNSAFE}\}$.
-
----
-
-## 🏛️ 2. Dual-Process Architecture Pipeline
-
-```text
-User Request (Prompt X)
-       │
-       ▼
-┌────────────────────────────────────────────────────────┐
-│ Tier 1: System-One Fast Loop (ModernBERT INT8 ONNX)    │
-│ - Target SLA: < 100ms CPU P50                          │
-│ - Output: { category: Enum, confidence: Float (0-1) }   │
-└──────────────────────┬─────────────────────────────────┘
-                       │
-       ┌───────────────┴───────────────┐
-       ▼                               ▼
-[Confidence >= Threshold]       [Confidence < Threshold]
-       │                               │
-       ├─► SAFE   ──► Forward LLM      └─► Trigger Tier 2 (Deep Loop)
-       └─► UNSAFE ──► Block 403                │
-                                               ▼
-                                ┌────────────────────────────────┐
-                                │ Tier 2: System-Two Deep Loop   │
-                                │ - Model: Llama-Guard-3-1B      │
-                                │ - Engine: Vulkan GGUF / Server │
-                                └──────────────┬─────────────────┘
-                                               │
-                                       [Verdict: Safe/Unsafe]
+## Repository Structure
+```
+kahneman-guard-pub/
+├── data/
+│   └── benchmarks/
+│       ├── kg_eval_cal.jsonl               # 300 holdout prompts for Temperature Scaling & ECE calibration
+│       ├── kg_eval_route.jsonl             # 400 prompts for dual-threshold routing optimization
+│       ├── kg_eval_test.jsonl              # 800 frozen prompts for final blind acceptance
+│       └── kg_eval_frozen_checksums.sha256 # SHA-256 integrity checksums (0% data leakage)
+├── notebooks/
+│   └── colab_L4/
+│       ├── kahneman-guard-colab-l4.ipynb   # Official Google Colab L4 training & quantization notebook
+│       ├── train_l4.py                     # Self-contained training module for ModernBERT with RLCD
+│       └── README.md                       # Colab instructions
+├── .gitignore
+└── README.md
 ```
 
----
-
-## 🔬 3. Supported Tier 1 Model Architectures
-
-The repository supports three fine-tuned Tier 1 models trained on 24,000 adversarial samples from **ToxicChat** and **BeaverTails**:
-
-| Variant | Base Model | Decision Paradigm | Fitted Temp ($T$) | CPU P50 Latency | Fast Decision Rate |
-|:---|:---|:---|:---:|:---:|:---:|
-| **`dense`** | ModernBERT-large | Pooled `[CLS]` + 2-layer MLP Head + RLCD | `1.9665` | **57.3 ms** | **95.2%** |
-| **`diffusion`** | ModernBERT-large | Discrete Masked Diffusion Canvas (djev) | `1.3358` | 93.4 ms | 67.2% |
-| **`diffusion-rlcd`** | ModernBERT-large | Diffusion Canvas + Policy Gradient RLCD | `1.9460` | 81.2 ms | **94.8%** |
-
----
-
-## 📊 4. Empirical Benchmark Matrix
-
-Evaluated across **1,140 academic benchmark samples** (`JailbreakBench`, `ToxicChat`, `BeaverTails`, and `XSTest`) at confidence threshold $\tau = 0.80$:
-
-| Architecture / System | Defense Success Rate (DSR ↑) | False Positive Rate (FPR ↓) | Brier Score (↓) | ECE (↓) | P50 Latency | P99 Latency (↓) | Escalation Rate | Compute Cost Savings (↑) |
-|:---|---:|---:|---:|---:|---:|---:|---:|---:|
-| **Baseline 1 (Fast: ModernBERT Dense)** | 92.5% | 4.8% | 0.0837 | 0.1529 | **57.3ms** | **63.0ms** | 0.0% | **95.0%** |
-| **Baseline 2 (Fast: ModernBERT Diffusion)** | 94.2% | 5.2% | **0.0699** | **0.1424** | 93.4ms | 99.5ms | 0.0% | **95.0%** |
-| **Baseline 3 (Slow Only: Llama Guard 3)** | 98.8% | 0.0% | 0.0450 | 0.0910 | 1380.0ms | 1380.0ms | 100.0% | 0.0% (Ref) |
-| **Proposed KahnemanGuard (Dense)** | **99.2%** | **0.0%** | 0.0712 | 0.1105 | **57.3ms** | 1443.0ms | 4.8% | **90.4%** |
-| **Proposed KahnemanGuard (Diffusion)** | **99.6%** | **0.0%** | **0.0620** | **0.0980** | 93.4ms | 1473.0ms | 32.8% | 63.8% |
-| **Proposed KahnemanGuard (Diffusion-RLCD)**| **99.4%** | **0.0%** | 0.0680 | 0.1040 | 81.2ms | 1461.0ms | **5.2%** | **89.6%** |
-
----
-
-## 🚀 5. Quick Start Guide
-
-### 1. Installation & Environment
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Run Comprehensive Unit & Integration Tests
-```bash
-pytest
-```
-
-### 3. Fetch Standard Academic Benchmarks
-Downloads and compiles 1,140 samples from ToxicChat, BeaverTails, JailbreakBench, and XSTest:
-```bash
-python scripts/download_benchmarks.py
-```
-
-### 4. Run Multi-Baseline Benchmark CLI
-```bash
-# Smoke test mode (All 6 architectures, 17 samples)
-python scripts/run_benchmark.py --mode quick
-
-# Dense architecture only (Smoke test: Baseline 1, Baseline 2, Proposed Dense)
-python scripts/run_benchmark.py --mode quick --dense-only
-
-# Dense architecture only (Full academic benchmark, 1,140 samples or limit)
-python scripts/run_benchmark.py --mode full --limit 100 --dense-only --export results/benchmark_report.json
-
-# Full academic benchmark suite (All architectures, with export)
-python scripts/run_benchmark.py --mode full --limit 100 --export results/benchmark_report.json
-```
-
-### 5. Generate Pareto Frontiers & Threshold Sweeps
-```bash
-python scripts/export_pareto_curves.py
-```
-Outputs LaTeX-ready CSV tables and publication figures (`results/pareto_frontiers.png`).
-
-### 6. Launch Interactive Streamlit Dashboard
-```bash
-streamlit run app_demo.py --server.port 8501
-```
-
-### 7. Run FastAPI Reverse Proxy Gateway
-```bash
-python -m uvicorn src.api.routes:app --host 0.0.0.0 --port 5950 --reload
-```
+## Quick Start on Google Colab
+Open `notebooks/colab_L4/kahneman-guard-colab-l4.ipynb` on Google Colab with an **NVIDIA L4 GPU** runtime:
+1. Validates Ada Lovelace GPU hardware and Bfloat16 support.
+2. Clones this repository into `/content/kahneman-guard`.
+3. Downloads and tokenizes 25,000 alignment prompts from Hugging Face (`ToxicChat` and `BeaverTails`).
+4. Trains both **Baseline Cross-Entropy** and **RLCD Calibrated ($T=1.1320$)** models in ~40 minutes.
+5. Computes Expected Calibration Error (ECE - 10 bins) and Brier Score on `kg_eval_cal.jsonl`.
+6. Quantizes model to ONNX Dynamic INT8 (379.6 MB) and benchmarks CPU inference latency.
