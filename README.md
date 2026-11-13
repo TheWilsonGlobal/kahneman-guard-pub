@@ -1,5 +1,9 @@
 # KahnemanGuard (Public Benchmark & Training Backend)
 
+**Master's Graduation Thesis:** Researching risk-aware selective cascading for efficient large language model input moderation.  
+**Author:** Pham Ngoc Son (MSSV: 25210182) | **Supervisor:** M.Sc. Nguyen Huu Quyen (CITD, UIT - VNU-HCM)  
+**Framework:** KahnemanGuard (RASC-IM)
+
 This public repository contains the minimal components required by the **KahnemanGuard** Colab training pipeline:
 
 ## Repository Structure
